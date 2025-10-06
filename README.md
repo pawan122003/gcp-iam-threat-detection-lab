@@ -1,5 +1,6 @@
 # GCP IAM Threat Detection Lab
 
+![Security Pipeline](https://github.com/pawan122003/gcp-iam-threat-detection-lab/actions/workflows/security.yml/badge.svg)
 ![Security](https://img.shields.io/badge/Security-GCP%20IAM-blue) ![Terraform](https://img.shields.io/badge/IaC-Terraform-purple) ![OPA](https://img.shields.io/badge/Policy-OPA-orange) ![Semgrep](https://img.shields.io/badge/SAST-Semgrep-green)
 
 Detect leaked keys & privilege abuse on GCP using policy-as-code, detection-as-code, and CI security gates.
@@ -98,21 +99,25 @@ bash tools/scripts/scan_repo.sh
 ## 🔐 Security Detection Capabilities
 
 ### 1. **IAM Policy Violations**
+
 - Detects overly permissive roles (Owner, Editor)
 - Identifies service accounts with excessive permissions
 - Flags public IAM bindings
 
 ### 2. **Secret Leakage**
+
 - Scans for GCP service account keys
 - Detects API keys and tokens in code
 - Identifies hardcoded credentials
 
 ### 3. **Privilege Escalation**
+
 - Monitors for dangerous permission combinations
 - Detects attempts to modify IAM policies
 - Tracks service account impersonation
 
 ### 4. **Compliance Checks**
+
 - CIS GCP Foundations Benchmark
 - Least privilege principle enforcement
 - Separation of duties validation
@@ -120,12 +125,15 @@ bash tools/scripts/scan_repo.sh
 ## 🧪 Hands-On Lab Scenarios
 
 ### Scenario 1: Leaked Service Account Key Detection
+
 Simulate accidental commit of a GCP service account key and watch the detection pipeline identify and block it.
 
 ### Scenario 2: Privilege Escalation Attempt
+
 Create an IAM policy that grants excessive permissions and see OPA policy engine reject it.
 
 ### Scenario 3: Audit Log Analysis
+
 Analyze GCP audit logs to detect suspicious IAM activity patterns.
 
 See [docs/lab.md](docs/lab.md) for detailed lab exercises.
@@ -194,6 +202,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 👤 Author
 
 **Pawan Bharambe**
+
 - DevOps Engineer specializing in GCP & Security
 - GitHub: [@pawan122003](https://github.com/pawan122003)
 - Focus: Cloud Security, Infrastructure as Code, DevSecOps
@@ -201,7 +210,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## ⭐ Show Your Support
 
 Give a ⭐️ if this project helped you learn about GCP security!
-
----
 
 **Note**: This is a lab environment for educational purposes. Always follow your organization's security policies in production.
