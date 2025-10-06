@@ -70,11 +70,11 @@ gcp-iam-threat-detection-lab/
 
 ### Prerequisites
 
-- Google Cloud account with billing enabled
-- Terraform >= 1.5
-- Docker (for OPA and Semgrep)
-- Python 3.9+
-- gcloud CLI
+- **Google Cloud account** with billing enabled
+- **Terraform** >= 1.5
+- **Docker** (for OPA and Semgrep)
+- **Python 3.9+**
+- **gcloud CLI**
 
 ### Installation
 
@@ -96,31 +96,57 @@ terraform plan
 bash tools/scripts/scan_repo.sh
 ```
 
+## 🚢 Codespaces & Previews
+
+This repository is configured with a **devcontainer** for GitHub Codespaces, providing a pre-configured development environment with all security tools installed:
+
+- **Terraform**, **OPA**, **Semgrep**, **Gitleaks**, **tfsec**, and **gcloud CLI**
+- VS Code extensions for Terraform, OPA, Semgrep, Python, and YAML
+- Automatic tool version display on container creation
+
+### Quick Start with Codespaces
+
+1. Click the **Code** button on this repository
+2. Select **Codespaces** tab
+3. Click **Create codespace on demo/pr-violation**
+4. Wait for the container to build (first time takes ~3-5 minutes)
+5. Start scanning: `bash tools/scripts/scan_repo.sh`
+
+### Local Development with Dev Container
+
+```bash
+# Using VS Code with Dev Containers extension
+code .
+# Press F1 → "Dev Containers: Reopen in Container"
+```
+
+The devcontainer automatically validates your environment and displays installed tool versions.
+
 ## 🔐 Security Detection Capabilities
 
-### 1. **IAM Policy Violations**
+### 1. IAM Policy Violations
 
-- Detects overly permissive roles (Owner, Editor)
-- Identifies service accounts with excessive permissions
-- Flags public IAM bindings
+- **Detects overly permissive roles** (Owner, Editor)
+- **Identifies service accounts** with excessive permissions
+- **Flags public IAM bindings**
 
-### 2. **Secret Leakage**
+### 2. Secret Leakage
 
-- Scans for GCP service account keys
-- Detects API keys and tokens in code
-- Identifies hardcoded credentials
+- **Scans for GCP service account keys**
+- **Detects API keys and tokens** in code
+- **Identifies hardcoded credentials**
 
-### 3. **Privilege Escalation**
+### 3. Privilege Escalation
 
-- Monitors for dangerous permission combinations
-- Detects attempts to modify IAM policies
-- Tracks service account impersonation
+- **Monitors for dangerous permission combinations**
+- **Detects attempts to modify IAM policies**
+- **Tracks service account impersonation**
 
-### 4. **Compliance Checks**
+### 4. Compliance Checks
 
-- CIS GCP Foundations Benchmark
-- Least privilege principle enforcement
-- Separation of duties validation
+- **CIS GCP Foundations Benchmark**
+- **Least privilege principle enforcement**
+- **Separation of duties validation**
 
 ## 🧪 Hands-On Lab Scenarios
 
@@ -140,12 +166,12 @@ See [docs/lab.md](docs/lab.md) for detailed lab exercises.
 
 ## 📊 CI/CD Security Pipeline
 
-The GitHub Actions workflow (`.github/workflows/security.yml`) automatically runs:
+The GitHub Actions workflow (.github/workflows/security.yml) automatically runs:
 
 1. **Terraform Security**
-   - `terraform fmt -check`
-   - `terraform validate`
-   - `tfsec` for Terraform static analysis
+   - terraform fmt -check
+   - terraform validate
+   - tfsec for Terraform static analysis
 
 2. **Policy Evaluation**
    - OPA policy checks against IAM configurations
