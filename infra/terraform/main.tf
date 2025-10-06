@@ -53,3 +53,10 @@ resource "google_storage_bucket_iam_member" "log_sink_writer" {
   role   = "roles/storage.objectCreator"
   member = google_logging_project_sink.iam_audit_sink.writer_identity
 }
+
+# INTENTIONAL SECURITY VIOLATION: Over-permissive IAM role for demo
+resource "google_project_iam_member" "overpermissive_editor" {
+  project = var.project_id
+  role    = "roles/editor"
+  member  = "serviceAccount:${google_service_account.lab_sa.email}"
+}
