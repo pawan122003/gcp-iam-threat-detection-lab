@@ -1,0 +1,35 @@
+rules:
+  - id: gcp-service-account-key-hardcoded
+    patterns:
+      - pattern-regex: '"type":\s*"service_account"'
+      - pattern-regex: '"private_key":\s*"-----BEGIN PRIVATE KEY-----'
+    message: |
+      Hardcoded GCP service account key detected. This is a critical security risk.
+      Store credentials in environment variables or secret managers.
+    severity: ERROR
+    languages:
+      - json
+      - python
+      - javascript
+    
+  - id: gcp-api-key-hardcoded
+    pattern-regex: 'AIza[0-9A-Za-z\-_]{35}'
+    message: |
+      Hardcoded GCP API key detected. Move to environment variables or Secret Manager.
+    severity: ERROR
+    languages:
+      - python
+      - javascript
+      - go
+      - bash
+
+  - id: iam-policy-overpermissive-role
+    patterns:
+      - pattern-regex: 'roles/(owner|editor)'
+    message: |
+      Overly permissive IAM role detected. Use principle of least privilege.
+    severity: WARNING
+    languages:
+      - python
+      - hcl
+      - yaml
