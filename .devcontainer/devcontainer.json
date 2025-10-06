@@ -1,0 +1,21 @@
+{
+  "name": "GCP IAM Threat Detection Lab",
+  "dockerFile": "Dockerfile",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "hashicorp.terraform",
+        "tsandall.opa",
+        "returntocorp.semgrep",
+        "ms-python.python",
+        "redhat.vscode-yaml",
+        "github.vscode-pull-request-github"
+      ]
+    }
+  },
+  "postCreateCommand": "echo '=== Security Tooling Versions ===' && terraform version && opa version && semgrep --version && gitleaks version && tfsec --version",
+  "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  }
+}
