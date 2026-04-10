@@ -1,0 +1,153 @@
+{
+  "agent": {
+    "id": "gcp_iam_enterprise_triage",
+    "name": "GCP IAM Enterprise Multi-Level Triage",
+    "version": "1.0.0",
+    "description": "Enterprise multi-level triage graph for GCP IAM and secret exposure findings."
+  },
+  "graph": {
+    "id": "gcp-iam-enterprise-triage-graph",
+    "goal_id": "gcp-iam-enterprise-triage",
+    "version": "1.0.0",
+    "entry_node": "governance-intake",
+    "entry_points": {
+      "start": "governance-intake"
+    },
+    "terminal_nodes": [
+      "executive-reporting"
+    ],
+    "nodes": [
+      {
+        "id": "governance-intake",
+        "name": "Governance Intake",
+        "description": "Establish policy and schema charter",
+        "node_type": "event_loop",
+        "input_keys": [
+          "scanner_findings_json",
+          "architecture_context",
+          "confidence_threshold"
+        ],
+        "output_keys": [
+          "governance_charter_json"
+        ],
+        "client_facing": false
+      },
+      {
+        "id": "iam-specialist",
+        "name": "IAM Specialist Lane",
+        "description": "Analyze IAM privilege and binding risk",
+        "node_type": "event_loop",
+        "input_keys": [
+          "scanner_findings_json",
+          "governance_charter_json"
+        ],
+        "output_keys": [
+          "iam_assessment_json"
+        ],
+        "client_facing": false
+      },
+      {
+        "id": "secret-specialist",
+        "name": "Secret Specialist Lane",
+        "description": "Analyze credential leakage risk",
+        "node_type": "event_loop",
+        "input_keys": [
+          "scanner_findings_json",
+          "governance_charter_json"
+        ],
+        "output_keys": [
+          "secret_assessment_json"
+        ],
+        "client_facing": false
+      },
+      {
+        "id": "correlation-committee",
+        "name": "Correlation Committee",
+        "description": "Merge and prioritize specialist findings",
+        "node_type": "event_loop",
+        "input_keys": [
+          "iam_assessment_json",
+          "secret_assessment_json",
+          "governance_charter_json"
+        ],
+        "output_keys": [
+          "triaged_findings_json",
+          "overall_risk"
+        ],
+        "client_facing": false
+      },
+      {
+        "id": "risk-committee",
+        "name": "Risk Committee",
+        "description": "Apply merge gate policy",
+        "node_type": "event_loop",
+        "input_keys": [
+          "triaged_findings_json",
+          "overall_risk",
+          "confidence_threshold"
+        ],
+        "output_keys": [
+          "governance_decision_json"
+        ],
+        "client_facing": false
+      },
+      {
+        "id": "executive-reporting",
+        "name": "Executive Reporting",
+        "description": "Generate executive summary",
+        "node_type": "event_loop",
+        "input_keys": [
+          "triaged_findings_json",
+          "governance_decision_json"
+        ],
+        "output_keys": [
+          "executive_summary_md"
+        ],
+        "client_facing": false
+      }
+    ],
+    "edges": [
+      {
+        "id": "governance-to-iam",
+        "source": "governance-intake",
+        "target": "iam-specialist",
+        "condition": "on_success",
+        "priority": 1
+      },
+      {
+        "id": "iam-to-secret",
+        "source": "iam-specialist",
+        "target": "secret-specialist",
+        "condition": "on_success",
+        "priority": 1
+      },
+      {
+        "id": "secret-to-correlation",
+        "source": "secret-specialist",
+        "target": "correlation-committee",
+        "condition": "on_success",
+        "priority": 1
+      },
+      {
+        "id": "correlation-to-risk",
+        "source": "correlation-committee",
+        "target": "risk-committee",
+        "condition": "on_success",
+        "priority": 1
+      },
+      {
+        "id": "risk-to-executive",
+        "source": "risk-committee",
+        "target": "executive-reporting",
+        "condition": "on_success",
+        "priority": 1
+      }
+    ]
+  },
+  "goal": {
+    "id": "gcp-iam-enterprise-triage",
+    "name": "GCP IAM Enterprise Multi-Level Security Triage",
+    "description": "Convert scanner evidence into governance-aligned decisions using specialist lanes and committee decisioning.",
+    "status": "draft"
+  }
+}

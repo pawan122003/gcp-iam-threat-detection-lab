@@ -1,0 +1,26 @@
+{
+  "goal": "Enterprise multi-level triage for GCP IAM and secret exposure scanner findings.",
+  "levels": [
+    {
+      "name": "Level 1 - Governance",
+      "nodes": ["governance-intake"],
+      "description": "Defines schema, policy, and confidence gate requirements."
+    },
+    {
+      "name": "Level 2 - Specialist Analysis",
+      "nodes": ["iam-specialist", "secret-specialist"],
+      "description": "Runs dedicated IAM and secret-risk analysis lanes."
+    },
+    {
+      "name": "Level 3 - Committee Decisioning",
+      "nodes": ["correlation-committee", "risk-committee", "executive-reporting"],
+      "description": "Correlates findings, applies merge-gate policy, and reports outcomes."
+    }
+  ],
+  "entry_node": "governance-intake",
+  "terminal_nodes": ["executive-reporting"],
+  "policy": {
+    "block_rule": "critical with confidence >= threshold",
+    "default_threshold": 0.80
+  }
+}

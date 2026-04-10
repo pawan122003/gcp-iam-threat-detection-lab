@@ -1,121 +1,552 @@
 name: Security Pipeline
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
 jobs:
   security-scan:
     runs-on: ubuntu-latest
-    name: Security Scanning
-    
+    name: Security Scanning + AI Triage
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+      id-token: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
-      
+
+      - name: Setup OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: Optional setup Hive framework core
+        if: vars.ENABLE_HIVE_ENTERPRISE_AGENT != 'false'
+        continue-on-error: true
+        shell: bash
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/aden-hive/hive.git .hive_runtime
+          cd .hive_runtime
+          git sparse-checkout set core
+          cd ..
+          python -m pip install -e ./.hive_runtime/core || true
+          echo "HIVE_CORE_PATH=$GITHUB_WORKSPACE/.hive_runtime/core" >> "$GITHUB_ENV"
+
+      - name: Install scanner CLIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip semgrep
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz" \
+            | tar -xz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          semgrep --version
+          gitleaks version
+          opa version
+
+      - name: Create artifacts directory
+        run: mkdir -p artifacts
+
       - name: Terraform Format Check
+        continue-on-error: true
         run: |
           cd infra/terraform
           terraform fmt -check -recursive
-        continue-on-error: true
-      
+
       - name: Terraform Validate
+        continue-on-error: true
         run: |
           cd infra/terraform
           terraform init -backend=false
           terraform validate
+
+      - name: Run Semgrep (JSON)
+        id: semgrep_scan
+        shell: bash
+        run: |
+          semgrep --config detection/rules/semgrep.yaml --json --output artifacts/semgrep.json . || true
+
+      - name: Run Gitleaks (JSON)
+        id: gitleaks_scan
+        shell: bash
+        run: |
+          gitleaks detect --source . --report-format json --report-path artifacts/gitleaks.json --exit-code 0 || true
+
+      - name: Run OPA policy tests
         continue-on-error: true
-      
-      - name: Run Semgrep
-        id: semgrep
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: detection/rules/semgrep.yaml
-        continue-on-error: true
-      
-      - name: Run Gitleaks
-        id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-      
-      - name: Setup OPA
-        uses: open-policy-agent/setup-opa@v2
-        with:
-          version: latest
-      
-      - name: Run OPA Policy Tests
         run: |
           opa test policies/opa/
-        continue-on-error: true
-      
-      - name: Comment PR with Security Findings
-        if: github.event_name == 'pull_request'
+
+      - name: Run OPA evaluation (JSON)
+        id: opa_eval
+        shell: bash
+        run: |
+          opa eval -d policies/opa -i input.json 'data.gcp.iam.least_privilege' --format json > artifacts/opa.json || echo '{"result":[]}' > artifacts/opa.json
+
+      - name: Ensure scanner JSON defaults exist
+        shell: bash
+        run: |
+          [ -f artifacts/semgrep.json ] || echo '{"results":[]}' > artifacts/semgrep.json
+          [ -f artifacts/gitleaks.json ] || echo '[]' > artifacts/gitleaks.json
+          [ -f artifacts/opa.json ] || echo '{"result":[]}' > artifacts/opa.json
+
+      - name: Determine fork context
+        id: fork_context
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify OpenAI API secret for non-fork runs
+        if: steps.fork_context.outputs.is_fork != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "${OPENAI_API_KEY}" ]]; then
+            echo "OPENAI_API_KEY secret is required for non-fork AI triage runs."
+            exit 1
+          fi
+
+      - name: Validate OIDC token for non-fork runs
+        if: steps.fork_context.outputs.is_fork != 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # Load OIDC token
+          oidc_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          if not oidc_token:
+              print("OIDC token not found. Ensure id-token: write permission is set.")
+              exit(1)
+
+          # Load GitHub context
+          github_context_path = os.getenv("GITHUB_EVENT_PATH")
+          if not github_context_path:
+              print("GitHub context not found.")
+              exit(1)
+
+          github_context = json.loads(Path(github_context_path).read_text(encoding="utf-8"))
+          repository = github_context.get("repository", "")
+          head_repository = github_context.get("pull_request", {}).get("head", {}).get("repo", {}).get("full_name", "")
+          is_fork = head_repository != repository
+
+          if is_fork:
+              print("Fork PR detected. OIDC token validation skipped.")
+              exit(0)
+
+          # Validate OIDC token claims
+          import requests
+          response = requests.get(
+              f"https://token.actions.githubusercontent.com/.well-known/openid-configuration"
+          )
+          response.raise_for_status()
+          jwks_uri = response.json()["jwks_uri"]
+
+          response = requests.get(jwks_uri)
+          response.raise_for_status()
+          jwks = response.json()
+
+          from jwt import PyJWKClient, decode
+          jwk_client = PyJWKClient(jwks_uri)
+          signing_key = jwk_client.get_signing_key_from_jwt(oidc_token)
+          claims = decode(
+              oidc_token,
+              signing_key.key,
+              algorithms=["RS256"],
+              audience="https://github.com/${{ github.repository }}",
+              options={"verify_exp": True},
+          )
+
+          # Validate claims
+          expected_issuer = "https://token.actions.githubusercontent.com"
+          expected_repository = "${{ github.repository }}"
+          expected_ref = "${{ github.ref }}"
+
+          if claims.get("iss") != expected_issuer:
+              print(f"Invalid issuer: {claims.get('iss')}")
+              exit(1)
+
+          if claims.get("repository") != expected_repository:
+              print(f"Invalid repository: {claims.get('repository')}")
+              exit(1)
+
+          if claims.get("ref") != expected_ref:
+              print(f"Invalid ref: {claims.get('ref')}")
+              exit(1)
+
+          print("OIDC token validation successful.")
+          PY
+
+      - name: Build scanner status artifact
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          def inspect(path: Path):
+              item = {"path": str(path), "exists": path.exists(), "json_valid": False, "sha256": ""}
+              if not path.exists():
+                  return item
+              raw = path.read_bytes()
+              item["sha256"] = hashlib.sha256(raw).hexdigest()
+              try:
+                  json.loads(raw.decode("utf-8"))
+                  item["json_valid"] = True
+              except Exception:
+                  item["json_valid"] = False
+              return item
+
+          semgrep = inspect(Path("artifacts/semgrep.json"))
+          gitleaks = inspect(Path("artifacts/gitleaks.json"))
+          opa = inspect(Path("artifacts/opa.json"))
+          status = {
+              "schema": "scanner-status.v1",
+              "semgrep": semgrep,
+              "gitleaks": gitleaks,
+              "opa": opa,
+          }
+          status["all_valid"] = all([
+              status["semgrep"]["exists"], status["semgrep"]["json_valid"],
+              status["gitleaks"]["exists"], status["gitleaks"]["json_valid"],
+              status["opa"]["exists"], status["opa"]["json_valid"],
+          ])
+          Path("artifacts/scanner-status.json").write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Build CI trust context artifact
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          is_fork = "${{ steps.fork_context.outputs.is_fork }}" == "true"
+          api_key_present = bool(os.getenv("OPENAI_API_KEY", ""))
+          oidc_token_valid = False
+          oidc_validation_reasons = []
+
+          if not is_fork:
+              try:
+                  # Load OIDC token validation result
+                  oidc_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+                  if not oidc_token:
+                      oidc_validation_reasons.append("OIDC token not found.")
+                  else:
+                      import requests
+                      response = requests.get(
+                          f"https://token.actions.githubusercontent.com/.well-known/openid-configuration"
+                      )
+                      response.raise_for_status()
+                      jwks_uri = response.json()["jwks_uri"]
+
+                      response = requests.get(jwks_uri)
+                      response.raise_for_status()
+                      jwks = response.json()
+
+                      from jwt import PyJWKClient, decode
+                      jwk_client = PyJWKClient(jwks_uri)
+                      signing_key = jwk_client.get_signing_key_from_jwt(oidc_token)
+                      claims = decode(
+                          oidc_token,
+                          signing_key.key,
+                          algorithms=["RS256"],
+                          audience="https://github.com/${{ github.repository }}",
+                          options={"verify_exp": True},
+                      )
+
+                      expected_issuer = "https://token.actions.githubusercontent.com"
+                      expected_repository = "${{ github.repository }}"
+                      expected_ref = "${{ github.ref }}"
+
+                      if claims.get("iss") != expected_issuer:
+                          oidc_validation_reasons.append(f"Invalid issuer: {claims.get('iss')}")
+                      elif claims.get("repository") != expected_repository:
+                          oidc_validation_reasons.append(f"Invalid repository: {claims.get('repository')}")
+                      elif claims.get("ref") != expected_ref:
+                          oidc_validation_reasons.append(f"Invalid ref: {claims.get('ref')}")
+                      else:
+                          oidc_token_valid = True
+              except Exception as e:
+                  oidc_validation_reasons.append(f"OIDC validation error: {str(e)}")
+
+          payload = {
+              "schema": "ci-context.v1",
+              "source": "github_actions",
+              "event_name": "${{ github.event_name }}",
+              "repository": "${{ github.repository }}",
+              "head_repository": "${{ github.event.pull_request.head.repo.full_name || github.repository }}",
+              "workflow_ref": "${{ github.workflow_ref }}",
+              "workflow_sha": "${{ github.sha }}",
+              "ref": "${{ github.ref }}",
+              "actor": "${{ github.actor }}",
+              "run_id": "${{ github.run_id }}",
+              "run_attempt": "${{ github.run_attempt }}",
+              "is_fork_pr": is_fork,
+              "api_key_present": api_key_present,
+              "no_llm_expected": is_fork,
+              "provenance_verified": False,
+              "oidc_token_valid": oidc_token_valid,
+              "oidc_validation_reasons": oidc_validation_reasons,
+          }
+          Path("artifacts/ci-context.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Build provenance manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          def digest(path: Path) -> str:
+              return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+
+          payload = {
+              "schema": "triage-provenance.v1",
+              "repository": "${{ github.repository }}",
+              "workflow_ref": "${{ github.workflow_ref }}",
+              "ref": "${{ github.ref }}",
+              "sha": "${{ github.sha }}",
+              "run_id": "${{ github.run_id }}",
+              "artifacts": {
+                  "semgrep": digest(Path("artifacts/semgrep.json")),
+                  "gitleaks": digest(Path("artifacts/gitleaks.json")),
+                  "opa": digest(Path("artifacts/opa.json")),
+                  "scanner_status": digest(Path("artifacts/scanner-status.json")),
+                  "ci_context": digest(Path("artifacts/ci-context.json")),
+              },
+          }
+          Path("artifacts/triage-provenance.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign triage provenance with GitHub OIDC
+        shell: bash
+        run: |
+          cosign sign-blob \
+            --yes \
+            --output-signature artifacts/triage-provenance.sig \
+            --output-certificate artifacts/triage-provenance.pem \
+            artifacts/triage-provenance.json
+
+      - name: Verify triage provenance signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW_IDENTITY="${{ github.server_url }}/${{ github.repository }}/.github/workflows/security.yml@${{ github.ref }}"
+          cosign verify-blob \
+            --certificate artifacts/triage-provenance.pem \
+            --signature artifacts/triage-provenance.sig \
+            --certificate-identity "${WORKFLOW_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            artifacts/triage-provenance.json
+
+      - name: Mark CI context as provenance verified
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/ci-context.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          payload["provenance_verified"] = True
+          path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Run enterprise multi-level triage (non-fork)
+        if: steps.fork_context.outputs.is_fork != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL != '' && vars.AI_MODEL || 'gpt-5.4' }}
+          ENABLE_HIVE_ENTERPRISE_AGENT: ${{ vars.ENABLE_HIVE_ENTERPRISE_AGENT != '' && vars.ENABLE_HIVE_ENTERPRISE_AGENT || 'true' }}
+          HIVE_CORE_PATH: ${{ vars.HIVE_CORE_PATH }}
+        run: |
+          python -m app.enterprise_agent_runner \
+            --semgrep artifacts/semgrep.json \
+            --gitleaks artifacts/gitleaks.json \
+            --opa artifacts/opa.json \
+            --architecture docs/architecture.md \
+            --markdown-out artifacts/ai-summary.md \
+            --sarif-out artifacts/ai-findings.sarif \
+            --decision-out artifacts/ai-decision.json \
+            --toon-out artifacts/ai-triage.toon.json \
+            --ci-context artifacts/ci-context.json \
+            --scanner-status artifacts/scanner-status.json \
+            --require-signed-provenance \
+            --confidence-threshold 0.80
+
+      - name: Run deterministic enterprise triage (fork PR)
+        if: steps.fork_context.outputs.is_fork == 'true'
+        env:
+          ENABLE_HIVE_ENTERPRISE_AGENT: ${{ vars.ENABLE_HIVE_ENTERPRISE_AGENT != '' && vars.ENABLE_HIVE_ENTERPRISE_AGENT || 'true' }}
+          HIVE_CORE_PATH: ${{ vars.HIVE_CORE_PATH }}
+        run: |
+          python -m app.enterprise_agent_runner \
+            --semgrep artifacts/semgrep.json \
+            --gitleaks artifacts/gitleaks.json \
+            --opa artifacts/opa.json \
+            --architecture docs/architecture.md \
+            --markdown-out artifacts/ai-summary.md \
+            --sarif-out artifacts/ai-findings.sarif \
+            --decision-out artifacts/ai-decision.json \
+            --toon-out artifacts/ai-triage.toon.json \
+            --ci-context artifacts/ci-context.json \
+            --scanner-status artifacts/scanner-status.json \
+            --require-signed-provenance \
+            --confidence-threshold 0.80 \
+            --no-llm \
+            --skip-reason "Fork pull request: AI triage skipped to protect repository secrets."
+
+      - name: Upload security artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-artifacts
+          path: artifacts/
+          retention-days: 30
+
+      - name: Upload AI SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: artifacts/ai-findings.sarif
+          category: ai-security-triage
+
+      - name: Upsert PR comment with AI summary
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const semgrepStatus = '${{ steps.semgrep.outcome }}';
-            const gitleaksStatus = '${{ steps.gitleaks.outcome }}';
-            
-            let comment = '## 🔒 Security Scan Summary\n\n';
-            
-            comment += '### Semgrep\n';
-            if (semgrepStatus === 'success') {
-              comment += '✅ No issues found\n\n';
-            } else {
-              comment += '⚠️ Issues detected - check workflow logs for details\n\n';
+            const fs = require("fs");
+            const marker = "<!-- ai-security-triage-agent -->";
+            const summaryPath = "artifacts/ai-summary.md";
+
+            let body = `${marker}\n## AI Security Triage Summary\n\nSummary file not generated.`;
+            if (fs.existsSync(summaryPath)) {
+              body = fs.readFileSync(summaryPath, "utf8");
             }
-            
-            comment += '### Gitleaks\n';
-            if (gitleaksStatus === 'success') {
-              comment += '✅ No secrets detected\n\n';
-            } else {
-              comment += '⚠️ Potential secrets detected - check workflow logs for details\n\n';
-            }
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
             });
 
-  opa-policy-gate:
-    runs-on: ubuntu-latest
-    name: OPA Policy Gate
-    needs: security-scan
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup OPA
-        uses: open-policy-agent/setup-opa@v2
-        with:
-          version: latest
-      
-      - name: Run OPA Policy Evaluation
-        id: opa-eval
+            const existing = comments.find(
+              (comment) => comment.user.type === "Bot" && comment.body && comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
+
+      - name: Enforce AI merge gate
+        if: steps.fork_context.outputs.is_fork != 'true'
         run: |
-          cd policies/opa
-          
-          # Run OPA eval and capture output
-          echo "Running OPA evaluation..."
-          opa eval -d . -i ../../infra/terraform/main.tf 'data.terraform.deny' --format pretty > opa_output.txt || true
-          
-          # Check if there are any deny rules
-          if grep -q "\[" opa_output.txt && ! grep -q "\[\]" opa_output.txt; then
-            echo "deny_found=true" >> $GITHUB_OUTPUT
-            cat opa_output.txt
-            exit 1
-          else
-            echo "deny_found=false" >> $GITHUB_OUTPUT
-            echo "No policy violations found"
-          fi
-        continue-on-error: false
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          decision_path = Path("artifacts/ai-decision.json")
+          ci_context_path = Path("artifacts/ci-context.json")
+          if not decision_path.exists():
+              print("artifacts/ai-decision.json missing. Triage step failed.")
+              sys.exit(1)
+          if not ci_context_path.exists():
+              print("artifacts/ci-context.json missing. Trust validation failed.")
+              sys.exit(1)
+
+          decision = json.loads(decision_path.read_text(encoding="utf-8"))
+          ci_context = json.loads(ci_context_path.read_text(encoding="utf-8"))
+
+          # Fail-closed policy enforcement
+          if decision.get("fail_closed"):
+              print("Fail-closed policy triggered:")
+              for reason in decision.get("block_reasons", []):
+                  print(f"- {reason}")
+              sys.exit(1)
+
+          # Provenance verification
+          if not decision.get("provenance_verified"):
+              print("Provenance verification was required but is not verified.")
+              sys.exit(1)
+
+          # Trust validation
+          trust_validation = decision.get("trust_validation", {})
+          if not trust_validation.get("valid", False):
+              print("Trust validation failed.")
+              for reason in trust_validation.get("reasons", []):
+                  print(f"- {reason}")
+              sys.exit(1)
+
+          # OIDC token validation
+          if not ci_context.get("oidc_token_valid", False):
+              print("OIDC token validation failed.")
+              for reason in ci_context.get("oidc_validation_reasons", []):
+                  print(f"- {reason}")
+              sys.exit(1)
+
+          # Scanner integrity
+          scanner_integrity = decision.get("scanner_integrity", {})
+          if not scanner_integrity.get("valid", False):
+              print("Scanner integrity validation failed.")
+              for reason in scanner_integrity.get("reasons", []):
+                  print(f"- {reason}")
+              sys.exit(1)
+
+          # Block merge for critical findings
+          if decision.get("block_merge"):
+              print("AI gate blocked the merge due to critical findings:")
+              for reason in decision.get("block_reasons", []):
+                  print(f"- {reason}")
+              sys.exit(1)
+
+          print("AI gate passed: no critical findings above confidence threshold.")
+          PY

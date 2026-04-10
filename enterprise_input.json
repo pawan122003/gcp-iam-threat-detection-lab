@@ -1,0 +1,5 @@
+{
+  "scanner_findings_json": "[{\"source\":\"opa\",\"rule_id\":\"opa.deny\",\"severity\":\"critical\",\"confidence\":0.91,\"file\":\"policies/opa/iam_least_privilege.rego\",\"line\":1,\"evidence\":\"Public access (allUsers) detected.\",\"remediation\":\"Remove public IAM members and scope access to explicit identities.\",\"category\":\"iam-policy\"},{\"source\":\"semgrep\",\"rule_id\":\"gcp-service-account-key-hardcoded\",\"severity\":\"high\",\"confidence\":0.78,\"file\":\"app/demo.py\",\"line\":9,\"evidence\":\"Hardcoded GCP service account key detected.\",\"remediation\":\"Rotate exposed credentials immediately and move secrets to Secret Manager.\",\"category\":\"secret-exposure\"}]",
+  "architecture_context": "GCP IAM threat detection with CI scanner outputs and confidence-based governance gate.",
+  "confidence_threshold": "0.80"
+}

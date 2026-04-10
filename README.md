@@ -1,74 +1,149 @@
 # GCP IAM Threat Detection Lab
 
-![Security Checks](https://github.com/pawan122003/gcp-iam-threat-detection-lab/workflows/Security%20Checks/badge.svg)
-![CodeQL](https://github.com/pawan122003/gcp-iam-threat-detection-lab/workflows/CodeQL/badge.svg)
+![Security Pipeline](https://github.com/pawan122003/gcp-iam-threat-detection-lab/workflows/Security%20Pipeline/badge.svg)
+![CodeQL](https://github.com/pawan122003/gcp-iam-threat-detection-lab/workflows/CodeQL%20Code%20Scanning/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-## 🏗️ Architecture
+Enterprise-focused lab for GCP IAM threat detection with scanner evidence, policy-as-code, and multi-level AI triage.
 
-For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
+## Architecture
 
-## 🔍 Features
+- Full architecture: [docs/architecture.md](docs/architecture.md)
+- Hive export package: `hive_exports/gcp_iam_enterprise_triage`
 
-1. **Terraform Configuration**
-   - Least privilege validation
-3. **Code Scanning**
-   - Semgrep for SAST
-   - Custom Python detectors
-   - Gitleaks for secret scanning
-4. **Reporting**
-   - Security findings aggregation
-   - SARIF report generation
-   - GitHub Security tab integration
+## What is implemented
 
-## 🛠️ Technologies Used
+1. **Static Security Inputs**
+   - Terraform validation
+   - Semgrep JSON
+   - Gitleaks JSON
+   - OPA JSON
+   - CodeQL
+2. **Enterprise Multi-Level Agent**
+   - Level 1: governance intake
+   - Level 2: IAM specialist + secrets specialist
+   - Level 3: correlation committee + risk committee + executive reporting
+3. **Execution Strategy**
+   - Hive-first execution when framework core is available
+   - Automatic local fallback for reliability
+4. **Trust + Verification**
+    - GitHub OIDC keyless provenance signing/verification (`cosign`)
+    - CI trust context and fork-safe policy validation (OIDC token validation, fork detection)
+    - Scanner integrity contract (`scanner-status.json`) with SHA-256 hash validation
+    - Fail-closed enforcement for missing/invalid OIDC tokens, unverified provenance, or invalid scanner artifacts
+5. **Gate Policy**
+   - Merge blocked only when finding is `critical` and confidence `>= 0.80`
+   - Fail-closed when trust/scanner/provenance validation is invalid
 
-| Category | Tools |
-|----------|-------|
-| IaC | Terraform, Google Cloud Platform |
-| Policy as Code | Open Policy Agent (OPA), Rego |
-| SAST | Semgrep, TFSec |
-| Secret Detection | Gitleaks |
-| CI/CD | GitHub Actions |
-| Languages | Python, Bash, HCL |
+## Repository Layout
 
-## 📈 Metrics & Monitoring
+- `app/ai_security_agent.py`: local triage implementation (reliable fallback core)
+- `app/enterprise_agent_runner.py`: Hive-first runner with fallback behavior
+- `hive_exports/gcp_iam_enterprise_triage/`: Hive template-style multi-level agent export
+- `.github/workflows/security.yml`: CI pipeline and gate
+- `tools/scripts/run_ai_triage.sh`: local end-to-end execution
 
-- **Detection Rate**: Percentage of malicious patterns caught
-- **False Positive Rate**: Accuracy of detection rules
-- **Time to Detection**: Speed of identifying threats
-- **Remediation Time**: Time to fix identified issues
+## Local Usage
 
-## 🤝 Contributing
+### Standard local run
 
-Contributions are welcome! Please:
+```bash
+bash tools/scripts/run_ai_triage.sh
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Add detection rules or improve existing ones
-4. Submit a pull request
+Artifacts (default `artifacts/`):
+- `semgrep.json` (scanner output)
+- `gitleaks.json` (scanner output)
+- `opa.json` (scanner output)
+- `scanner-status.json` (SHA-256 hash validation, schema validation)
+- `ci-context.json` (OIDC token validation, fork detection, provenance state)
+- `triage-provenance.json` (signed provenance manifest)
+- `triage-provenance.sig` (provenance signature)
+- `triage-provenance.pem` (provenance certificate)
+- `ai-summary.md` (markdown summary for PR comments)
+- `ai-findings.sarif` (SARIF output for GitHub Code Scanning)
+- `ai-decision.json` (merge gate decision, trust validation, scanner integrity)
+- `ai-triage.toon.json` (Token-Oriented Object Notation v1)
 
-## 📚 Resources
+### Force local runner (skip Hive mode)
 
+```bash
+python -m app.enterprise_agent_runner \
+  --semgrep artifacts/semgrep.json \
+  --gitleaks artifacts/gitleaks.json \
+  --opa artifacts/opa.json \
+  --architecture docs/architecture.md \
+  --markdown-out artifacts/ai-summary.md \
+  --sarif-out artifacts/ai-findings.sarif \
+  --decision-out artifacts/ai-decision.json \
+  --toon-out artifacts/ai-triage.toon.json \
+  --ci-context artifacts/ci-context.json \
+  --scanner-status artifacts/scanner-status.json \
+  --confidence-threshold 0.80 \
+  --force-local
+```
+
+### Run Hive export directly (when Hive core is available)
+
+```bash
+python -m hive_exports.gcp_iam_enterprise_triage validate
+python -m hive_exports.gcp_iam_enterprise_triage run --input-json enterprise_input.json
+```
+
+## CI/CD behavior
+
+`security.yml`:
+1. Runs scanner stages and emits JSON artifacts.
+2. Builds scanner integrity (`scanner-status.json`) with SHA-256 hash validation.
+3. Builds CI trust context (`ci-context.json`) with OIDC token validation and fork detection.
+4. Signs provenance manifest (`triage-provenance.json`) with GitHub OIDC and verifies signer identity.
+5. Enforces fork-safe behavior: fork PRs run with `--no-llm` and skip provenance verification.
+6. Tries enterprise Hive multi-level mode first for non-fork PRs.
+7. Falls back to local triage when Hive runtime is missing/failing.
+8. Uploads SARIF, PR summary, and TOON artifacts.
+9. Applies fail-closed merge gate using `ai-decision.json` (blocks merge for invalid OIDC, provenance, or scanner artifacts).
+
+## Environment variables
+
+- `OPENAI_API_KEY`: Required for non-mock LLM execution (non-fork PRs only).
+- `AI_MODEL`: Optional model override (default: `gpt-5.4`).
+- `ENABLE_HIVE_ENTERPRISE_AGENT`: `true`/`false`, default `true`.
+- `HIVE_CORE_PATH`: Optional path to Hive `core` directory for imports.
+- `CONFIDENCE_THRESHOLD`: Local script threshold override (default: `0.80`).
+- `ARTIFACT_DIR`: Local script artifact directory (default: `artifacts/`).
+- `REQUIRE_SIGNED_PROVENANCE`: Fail-closed if provenance is not verified (default: `false`).
+
+## TOON Contract
+
+The token-oriented artifact (`ai-triage.toon.json`) uses:
+
+- `schema: "toon.v1"`
+- `token_table`: deterministic deduplicated token list
+- `objects`: array of normalized objects
+- object fields:
+  - `object_id`
+  - `object_type`
+  - `pairs` as `[key_token_index, value_token_index]`
+
+It contains one decision object and one object per finding.
+
+## Testing
+
+```bash
+python -m pytest -q tests -p no:cacheprovider
+```
+
+## Resources
+
+- [Aden Hive Framework](https://github.com/aden-hive/hive)
 - [GCP IAM Best Practices](https://cloud.google.com/iam/docs/best-practices)
-- [CIS GCP Foundations Benchmark](https://www.cisecurity.org/benchmark/google_cloud_computing_platform)
 - [OPA Documentation](https://www.openpolicyagent.org/docs/latest/)
-- [Semgrep Rules](https://semgrep.dev/r)
+- [Semgrep Docs](https://semgrep.dev/docs/)
 
-## 📝 License
+## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License. See [LICENSE](LICENSE).
 
-## 👤 Author
+## Security Note
 
-**Pawan Bharambe**
-
-- DevOps Engineer specializing in GCP & Security
-- GitHub: [@pawan122003](https://github.com/pawan122003)
-- Focus: Cloud Security, Infrastructure as Code, DevSecOps
-
-## ⭐ Show Your Support
-
-Give a ⭐️ if this project helped you learn about GCP security!
-
-**Note**: This is a lab environment for educational purposes. Always follow your organization's security policies in production.
+Rotate any previously exposed API key and replace the repository secret before production usage.

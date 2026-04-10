@@ -1,31 +1,32 @@
 # GCP IAM Threat Detection Lab - Hands-On Guide
 
-This lab guide walks you through hands-on scenarios to detect and prevent IAM security threats in GCP.
+This lab guide walks through IAM threat detection with scanner evidence and enterprise multi-level AI triage.
 
 ## Prerequisites
 
 - GCP account with billing enabled
 - `gcloud` CLI installed and configured
 - Terraform >= 1.5
-- Basic knowledge of GCP IAM
+- Python 3.11+
+- Optional Hive framework core for Hive-first execution
 
 ## Lab Setup
 
-### 1. Clone and Initialize
+### 1. Clone and initialize
 
 ```bash
 git clone https://github.com/pawan122003/gcp-iam-threat-detection-lab.git
 cd gcp-iam-threat-detection-lab
 ```
 
-### 2. Configure GCP Project
+### 2. Configure GCP project
 
 ```bash
 gcloud auth application-default login
 export GOOGLE_PROJECT="your-project-id"
 ```
 
-### 3. Deploy Infrastructure
+### 3. Deploy infrastructure
 
 ```bash
 cd infra/terraform
@@ -34,17 +35,17 @@ terraform plan -var="project_id=$GOOGLE_PROJECT"
 terraform apply -var="project_id=$GOOGLE_PROJECT"
 ```
 
-## Scenario 1: Detecting Overly Permissive IAM Roles
+## Scenario 1: Detect over-permissive IAM roles
 
 ### Objective
-Learn how OPA policies prevent assignment of overly permissive roles.
+Validate least-privilege policy enforcement.
 
 ### Steps
 
-1. **Create a test IAM binding with Owner role:**
+1. Create test policy input:
 
 ```bash
-echo '
+cat > input.json <<'EOF'
 {
   "bindings": [
     {
@@ -52,46 +53,79 @@ echo '
       "members": ["user:test@example.com"]
     }
   ]
-}' > test_policy.json
+}
+EOF
 ```
 
-2. **Test with OPA:**
+2. Run OPA policy evaluation:
 
 ```bash
-opa eval -d policies/opa/iam_least_privilege.rego \
-  -i test_policy.json \
-  'data.gcp.iam.least_privilege.deny'
+opa eval -d policies/opa/iam_least_privilege.rego -i input.json 'data.gcp.iam.least_privilege'
 ```
 
-3. **Expected Result:** Policy violation detected
+3. Confirm deny output is present.
 
-## Scenario 2: Secret Scanning with Semgrep
+## Scenario 2: Run enterprise triage locally
 
 ### Objective
-Detect hardcoded GCP service account keys in code.
+Generate decision JSON, SARIF, TOON, and markdown summary using enterprise runner.
 
 ### Steps
 
-1. **Run Semgrep scan:**
+1. Run full local triage:
 
 ```bash
-semgrep --config detection/rules/semgrep.yaml .
+bash tools/scripts/run_ai_triage.sh
 ```
 
-2. **Trigger CI/CD pipeline** by pushing code changes
+2. Review outputs:
 
-3. **Review findings** in GitHub Actions
+- `artifacts/ai-decision.json`
+- `artifacts/ai-findings.sarif`
+- `artifacts/ai-summary.md`
+- `artifacts/ai-triage.toon.json`
+- `artifacts/scanner-status.json`
+- `artifacts/ci-context.json`
+- `artifacts/triage-provenance.json`
 
-## Scenario 3: Audit Log Analysis
+3. Validate gate result:
+
+```bash
+cat artifacts/ai-decision.json
+```
+
+4. Inspect token-oriented output:
+
+```bash
+cat artifacts/ai-triage.toon.json
+```
+
+## Scenario 3: Hive-native multi-level run (optional)
+
+### Objective
+Execute the Hive export directly when Hive core is installed.
+
+### Steps
+
+1. Ensure Hive core is available and export path is importable.
+2. Validate export:
+
+```bash
+python -m hive_exports.gcp_iam_enterprise_triage validate
+```
+
+3. Execute with context file:
+
+```bash
+python -m hive_exports.gcp_iam_enterprise_triage run --input-json enterprise_input.json
+```
+
+## Scenario 4: Audit log analysis
 
 ### Objective
 Monitor IAM policy changes in GCP audit logs.
 
 ### Steps
-
-1. **Enable audit logging** (already configured in Terraform)
-
-2. **Query recent IAM changes:**
 
 ```bash
 gcloud logging read \
@@ -100,7 +134,22 @@ gcloud logging read \
   --format json
 ```
 
-3. **Analyze results** for suspicious activity
+Inspect for unexpected principals, role grants, or high-frequency policy mutations.
+
+## Scenario 5: CI trust + provenance controls
+
+### Objective
+Verify fail-closed trust behavior and signed provenance requirements in CI.
+
+### Checks
+
+1. Non-fork PRs must provide `OPENAI_API_KEY`.
+2. Fork PRs must run with `--no-llm` and no secret usage.
+3. CI must produce:
+   - `artifacts/triage-provenance.json`
+   - `artifacts/triage-provenance.sig`
+   - `artifacts/triage-provenance.pem`
+4. Merge gate fails closed if trust/scanner/provenance validation is invalid.
 
 ## Cleanup
 
@@ -109,8 +158,9 @@ cd infra/terraform
 terraform destroy -var="project_id=$GOOGLE_PROJECT"
 ```
 
-## Additional Resources
+## Additional resources
 
+- [Aden Hive Framework](https://github.com/aden-hive/hive)
 - [GCP IAM Best Practices](https://cloud.google.com/iam/docs/best-practices)
 - [OPA Policy Language](https://www.openpolicyagent.org/docs/latest/policy-language/)
 - [Semgrep Documentation](https://semgrep.dev/docs/)

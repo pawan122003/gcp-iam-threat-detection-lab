@@ -1,8 +1,4 @@
-"""GCP IAM Threat Detection Lab - Main Application Package."""
+"""Application package for GCP IAM threat detection triage pipelines."""
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __author__ = "Pawan Bharambe"
-
-def hello():
-    """Return a greeting message."""
-    return "Hello from GCP IAM Threat Detection Lab!"

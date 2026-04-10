@@ -35,3 +35,21 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Python caches and local test/temp artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+.pytest_tmp/
+.test_tmp/
+pytest-cache-files-*/
+
+# Local scanner output artifacts
+artifacts/
+
+# Local Hive framework clones used for optional enterprise mode
+.hive_ref/
+.hive_runtime/
+
+# Editor local settings
+.vscode/
