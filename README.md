@@ -1,7 +1,5 @@
 # GCP IAM Threat Detection Lab
 
-![Security Pipeline]
-![CodeQL]
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 Enterprise-focused lab for GCP IAM threat detection with scanner evidence, policy-as-code, and multi-level AI triage.
